@@ -5,96 +5,119 @@ local M = {}
 
 local items = {}
 
+-- 兼容新旧 nvim-treesitter API 获取节点
+local function get_node_at_cursor()
+	-- 先尝试新 API
+	local ok, node = pcall(vim.treesitter.get_node)
+	if ok and node then
+		return node
+	end
+
+	-- 回退到旧 API
+	local ok, ts_utils = pcall(require, "nvim-treesitter.ts_utils")
+	if ok then
+		return ts_utils.get_node_at_cursor()
+	end
+
+	-- 两种都失败
+	vim.notify("Failed to get treesitter node - nvim-treesitter may not be properly installed", vim.log.levels.WARN)
+	return nil
+end
+
 M.new = function()
-    local self = setmetatable({}, { __index = M })
-    return self
+	local self = setmetatable({}, { __index = M })
+	return self
 end
 
 function M:enabled()
-    local function check_if_inside_imports()
-        local cur_node = require("nvim-treesitter.ts_utils").get_node_at_cursor()
+	local function check_if_inside_imports()
+		local cur_node = get_node_at_cursor()
 
-        local func = cur_node
-        local flag = false
+		if not cur_node then
+			return false
+		end
 
-        while func do
-            if func:type() == "import_declaration" then
-                flag = true
-                break
-            end
+		local func = cur_node
+		local flag = false
 
-            func = func:parent()
-        end
+		while func do
+			if func:type() == "import_declaration" then
+				flag = true
+				break
+			end
 
-        return flag
-    end
+			func = func:parent()
+		end
 
-    if vim.bo.filetype ~= "go" then
-        return
-    end
+		return flag
+	end
 
-    return check_if_inside_imports()
+	if vim.bo.filetype ~= "go" then
+		return
+	end
+
+	return check_if_inside_imports()
 end
 
 function M:get_completions(context, callback)
-    local bufnr = vim.api.nvim_get_current_buf()
+	local bufnr = vim.api.nvim_get_current_buf()
 
-    if next(items) == nil or items[bufnr] == nil then
-        callback()
-        return
-    end
+	if next(items) == nil or items[bufnr] == nil then
+		callback()
+		return
+	end
 
-    callback({ items = items[bufnr], is_incomplete_forward = false })
+	callback({ items = items[bufnr], is_incomplete_forward = false })
 end
 
 local init_items = function(a)
-    local client = vim.lsp.get_client_by_id(a.data.client_id)
-    local bufnr = vim.api.nvim_get_current_buf()
+	local client = vim.lsp.get_client_by_id(a.data.client_id)
+	local bufnr = vim.api.nvim_get_current_buf()
 
-    if client == nil then
-        return
-    end
+	if client == nil then
+		return
+	end
 
-    -- https://pkg.go.dev/golang.org/x/tools/gopls/internal/protocol#ExecuteCommandParams
-    local method = "workspace/executeCommand"
+	-- https://pkg.go.dev/golang.org/x/tools/gopls/internal/protocol#ExecuteCommandParams
+	local method = "workspace/executeCommand"
 
-    local params = {
-        command = "gopls.list_known_packages",
-        arguments = { { uri = vim.uri_from_bufnr(bufnr) } },
-    }
+	local params = {
+		command = "gopls.list_known_packages",
+		arguments = { { uri = vim.uri_from_bufnr(bufnr) } },
+	}
 
-    local handler = function(result, context, _)
-        if context == nil and result ~= nil then
-            return
-        end
+	local handler = function(result, context, _)
+		if context == nil and result ~= nil then
+			return
+		end
 
-        if result == nil and context == nil then
-            return
-        end
+		if result == nil and context == nil then
+			return
+		end
 
-        local tmp = {}
+		local tmp = {}
 
-        for _, v in ipairs(context.Packages) do
-            table.insert(tmp, {
-                label = string.format('"%s"', v),
-                kind = 9,
-                insertText = string.format('"%s"', v),
-            })
-        end
+		for _, v in ipairs(context.Packages) do
+			table.insert(tmp, {
+				label = string.format('"%s"', v),
+				kind = 9,
+				insertText = string.format('"%s"', v),
+			})
+		end
 
-        items[bufnr] = tmp
-    end
+		items[bufnr] = tmp
+	end
 
-    local ok, id = client:request(method, params, handler, bufnr)
+	local ok, id = client:request(method, params, handler, bufnr)
 end
 
 function M.setup()
-    vim.api.nvim_create_autocmd({ "LspAttach" }, {
-        group = vim.api.nvim_create_augroup("go_pkgs", { clear = true }),
+	vim.api.nvim_create_autocmd({ "LspAttach" }, {
+		group = vim.api.nvim_create_augroup("go_pkgs", { clear = true }),
 
-        pattern = { "*.go" },
-        callback = init_items,
-    })
+		pattern = { "*.go" },
+		callback = init_items,
+	})
 end
 
 return M
